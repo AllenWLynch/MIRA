@@ -31,7 +31,7 @@ def get_peak_and_tss_data(self, adata, tss_data = None, peak_chrom = 'chr', peak
         raise Exception('User must provide dataframe of tss data to "tss_data" parameter.')
 
     if isinstance(tss_data, str):
-        tss_data = pd.read_csv(tss_data, sep = sep)
+        tss_data = pd.read_csv(tss_data, sep = sep, index_col= False)
         tss_data.columns = tss_data.columns.str.strip('#')
 
     return_dict = fetch_peaks(self, adata, chrom = peak_chrom, start = peak_start, end = peak_end)
