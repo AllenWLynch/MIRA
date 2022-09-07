@@ -5,7 +5,7 @@ import pyro.distributions as dist
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import Adam
+from torch.optim import AdamW as Adam
 from pyro.infer import SVI, TraceMeanField_ELBO
 from tqdm.auto import tqdm, trange
 import numpy as np
@@ -154,22 +154,22 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             endogenous_key = None,
             exogenous_key = None,
             counts_layer = None,
-            num_topics = 16,
-            hidden = 128,
+            num_topics = 24,
+            hidden = 256,
             num_layers = 3,
-            num_epochs = 40,
-            decoder_dropout = 0.2,
-            encoder_dropout = 0.1,
+            num_epochs = 24,
+            decoder_dropout = 0.05,
+            encoder_dropout = 0.01,
             use_cuda = True,
             seed = 0,
-            min_learning_rate = 1e-6,
+            min_learning_rate = 1e-3,
             max_learning_rate = 1e-1,
-            beta = 0.95,
+            beta = 0.92,
             batch_size = 64,
             initial_pseudocounts = 50,
             nb_parameterize_logspace = True,
             embedding_size = None,
-            kl_strategy = 'monotonic',
+            kl_strategy = 'cyclic',
             reconstruction_weight = 1.,
             dataset_loader_workers = 0,
             ):
@@ -492,9 +492,20 @@ class BaseModel(torch.nn.Module, BaseEstimator):
     def _get_1cycle_scheduler(self, n_batches_per_epoch):
         
         return pyro.optim.lr_scheduler.PyroLRScheduler(OneCycleLR_Wrapper, 
-            {'optimizer' : Adam, 'optim_args' : {'lr' : self.min_learning_rate, 'betas' : (self.beta, 0.999)}, 'max_lr' : self.max_learning_rate, 
-            'steps_per_epoch' : n_batches_per_epoch, 'epochs' : self.num_epochs, 'div_factor' : self.max_learning_rate/self.min_learning_rate,
-            'cycle_momentum' : False, 'three_phase' : False, 'verbose' : False})
+            {'optimizer' : Adam, 
+            'optim_args' : {'lr' : self.min_learning_rate, 
+                'betas' : (self.beta, 0.999), 
+                'weight_decay' : 1e-3}, 
+            'max_lr' : self.max_learning_rate, 
+            'steps_per_epoch' : n_batches_per_epoch, 'epochs' : self.num_epochs, 
+            'div_factor' : self.max_learning_rate/self.min_learning_rate,
+            'cycle_momentum' : True, 
+            'three_phase' : False, 
+            'verbose' : False,
+            'base_momentum' : 0.85,
+            'max_momentum' : 0.95,
+            }
+        )
 
     @staticmethod
     def _get_monotonic_kl_factor(step_num, *, n_epochs, n_batches_per_epoch):
@@ -513,6 +524,22 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             return 1.
         else:
             return max(tau/0.5, n_cycles/total_steps)
+
+    @staticmethod
+    def _get_stepup_cyclic_KL(step_num, *, n_epochs, n_batches_per_epoch):
+        
+        total_steps = n_epochs * n_batches_per_epoch
+        n_cycles = 3
+        steps_per_cycle = total_steps/n_cycles + 1
+
+        tau = (step_num % steps_per_cycle)/steps_per_cycle
+
+        if tau > 0.5 or step_num >= (0.95 * total_steps):
+            x = 1.
+        else:
+            x = max(tau/0.5, n_cycles/total_steps)
+
+        return x * min((step_num+1)//steps_per_cycle + 1, n_cycles)/n_cycles
 
 
     @property
@@ -565,7 +592,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
     @adi.wraps_modelfunc(fetch = tmi.fit_adata, 
         fill_kwargs=['features','highly_variable','dataset'])
-    def get_learning_rate_bounds(self, num_epochs = 6, eval_every = 10, 
+    def get_learning_rate_bounds(self, 
+        num_steps = 100, num_epochs = 6, eval_every = 3, 
         lower_bound_lr = 1e-6, upper_bound_lr = 1,*,
         features, highly_variable, dataset):
         '''
@@ -616,8 +644,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
         self._get_dataset_statistics(dataset)
 
-        n_batches = len(dataset)//self.batch_size
-        eval_steps = ceil((n_batches * num_epochs)/eval_every)
+        #n_batches = len(dataset)//self.batch_size
+        eval_steps = int(num_steps) # ceil((n_batches * num_epochs)/eval_every)
 
         learning_rates = np.exp(
                 np.linspace(np.log(lower_bound_lr), 
@@ -630,9 +658,11 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         def lr_function(e):
             return learning_rates[e]/learning_rates[0]
 
-        scheduler = pyro.optim.LambdaLR({'optimizer': Adam, 
-            'optim_args': {'lr': learning_rates[0], 'betas' : (0.95, 0.999)}, 
-            'lr_lambda' : lr_function})
+        scheduler = pyro.optim.LambdaLR({
+            'optimizer': Adam, 
+            'optim_args': {'lr': learning_rates[0], 'betas' : (0.92, 0.999)}, 
+            'lr_lambda' : lr_function}
+        )
 
         self.svi = SVI(self.model, self.guide, scheduler, loss=TraceMeanField_ELBO())
 
@@ -644,7 +674,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             t = trange(eval_steps-2, desc = 'Learning rate range test', leave = True)
             _t = iter(t)
 
-            for epoch in range(num_epochs + 1):
+            while True:
 
                 self.train()
                 for batch in self.transform_batch(data_loader, bar = False):
@@ -656,12 +686,10 @@ class BaseModel(torch.nn.Module, BaseEstimator):
                         scheduler.step()
                         learning_rate_losses.append(step_loss/(self.batch_size * self.num_exog_features))
                         step_loss = 0.0
-                        try:
-                            next(_t)
-                        except StopIteration:
-                            break
+                        
+                        next(_t)
 
-        except ValueError:
+        except (ValueError, StopIteration):
             logger.error('\nGradient overflow from too high learning rate, stopping test early.')
 
         self.gradient_lr = np.array(learning_rates[:len(learning_rate_losses)])
@@ -882,7 +910,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self.svi = SVI(self.model, self.guide, scheduler, loss=TraceMeanField_ELBO())
         self.training_loss = []
         
-        anneal_fn = partial(self._get_cyclic_KL_factor if self.kl_strategy == 'cyclic' else self._get_monotonic_kl_factor, 
+        anneal_fn = partial(self._get_stepup_cyclic_KL if self.kl_strategy == 'cyclic' else self._get_monotonic_kl_factor, 
             n_epochs = self.num_epochs, n_batches_per_epoch = n_batches)
 
         step_count = 0

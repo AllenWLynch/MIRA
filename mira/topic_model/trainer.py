@@ -1,6 +1,6 @@
 
 import numpy as np
-from sklearn.model_selection import KFold, BaseCrossValidator
+from sklearn.model_selection import KFold, BaseCrossValidator, ShuffleSplit
 from functools import partial
 import os
 import optuna
@@ -152,12 +152,13 @@ class TopicModelTuner:
         min_epochs = 20, max_epochs = 40,
         min_dropout = 0.01, max_dropout = 0.15,
         batch_sizes = [32,64,128],
-        cv = 5, iters = 64,
+        iters = 32,
         seed = 2556,
-        pruner = 'mira',
+        cv = ShuffleSplit(n_splits=1, train_size=0.8),
+        pruner = optuna.pruners.NopPruner(),
         sampler = 'tpe',
-        tune_layers = True,
-        tune_kl_strategy  = True,
+        tune_layers = False,
+        tune_kl_strategy  = False,
         tensorboard_logdir = 'runs',
         storage = 'sqlite:///mira-tuning.db',
         model_survival_rate=1/4,*,
@@ -343,10 +344,11 @@ class TopicModelTuner:
             
         params = dict(
             num_topics = trial.suggest_int('num_topics', min_topics, max_topics, log=True),
-            batch_size = trial.suggest_categorical('batch_size', batch_sizes),
-            encoder_dropout = trial.suggest_float('encoder_dropout', min_dropout, max_dropout),
-            num_epochs = trial.suggest_int('num_epochs', min_epochs, max_epochs, log = True),
-            beta = trial.suggest_float('beta', 0.90, 0.99, log = True),
+            decoder_dropout = trial.suggest_float('decoder_dropout', 0.05, 0.2, log = True),
+            #batch_size = trial.suggest_categorical('batch_size', batch_sizes),
+            #encoder_dropout = trial.suggest_float('encoder_dropout', min_dropout, max_dropout),
+            #num_epochs = trial.suggest_int('num_epochs', min_epochs, max_epochs, log = True),
+            #beta = trial.suggest_float('beta', 0.90, 0.99, log = True),
         )
 
         if tune_kl_strategy:
@@ -354,12 +356,6 @@ class TopicModelTuner:
 
         if tune_layers:
             params['num_layers'] = trial.suggest_categorical('num_layers', [2,3])
-
-        domains = {
-            'kl_strategy' : ['monotonic','cyclic'],
-            'batch_size' : batch_sizes,
-            'num_layers' : [2,3],
-        }
 
         model.set_params(**params, seed = base_seed + trial.number)
         cv_scores = []
@@ -381,7 +377,7 @@ class TopicModelTuner:
                     for epoch, loss in model._internal_fit(train_counts, writer = model_writer):
                         
                         if not parallel:
-                            num_hashtags = int(10 * epoch/params['num_epochs'])
+                            num_hashtags = int(10 * epoch/model.num_epochs)
                             print('\rProgress: ' + '|##########'*step + '|' + '#'*num_hashtags + ' '*(10-num_hashtags) + '|' + '          |'*(num_splits-step-1),
                                 end = '')
 
@@ -403,7 +399,7 @@ class TopicModelTuner:
                                 'num_folds_tested' : len(cv_scores),
                                 'number' : trial.number}
 
-            trial_writer.add_hparams(params, metrics, domains)
+            trial_writer.add_hparams(params, metrics)
 
             if must_prune:
                 raise optuna.TrialPruned()
@@ -645,7 +641,7 @@ class TopicModelTuner:
 
 
     @adi.wraps_modelfunc(tmi.fetch_split_train_test, adi.return_output, ['all_data', 'train_data', 'test_data'])
-    def select_best_model(self, top_n_trials = 5, color_col = 'leiden', record_umaps = False,*,
+    def select_best_model(self, top_n_trials = 3, color_col = 'leiden', record_umaps = False,*,
         all_data, train_data, test_data):
         '''
         Retrain best parameter combinations on all training data, then 
@@ -675,12 +671,6 @@ class TopicModelTuner:
             
         '''
 
-        domains = {
-            'kl_strategy' : ['monotonic','cyclic'],
-            'batch_size' : self.batch_sizes,
-            'num_layers' : [2,3],
-        }
-
         scores = []
         best_params = self._get_best_params(top_n_trials)
 
@@ -700,7 +690,7 @@ class TopicModelTuner:
                         scores.append(test_score)
 
                         logger.info('Score: {:.5e}'.format(test_score))
-                        writer.add_hparams(params, {'test_score' : test_score}, domains)
+                        writer.add_hparams(params, {'test_score' : test_score})
 
                         if record_umaps:
 
