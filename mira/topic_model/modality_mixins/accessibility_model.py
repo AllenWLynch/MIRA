@@ -146,6 +146,12 @@ class AccessibilityModel:
             ).astype(np.int64)
     
 
+    def _get_projection_matrix(self, svd_pipeline):
+        tfidf = svd_pipeline.steps[0][1]
+        svd = svd_pipeline.steps[1][1]
+        return svd.components_ * 1/tfidf.idf_[None,:] * svd.singular_values_[:,None]
+    
+
     def _get_lsi_projection(self, dataset):
 
         try:
@@ -153,7 +159,7 @@ class AccessibilityModel:
             logger.warn('LSI projection already calculated. Using the old projection.')
         except AttributeError:
             
-            logger.info('Calculating LSI projection of data for "light" encoder model.')
+            logger.info('Calculating LSI projection of data for "light" encoder model.')           
             X_matrix = sparse.vstack([
                 x['endog_features']
                 for x in dataset
@@ -165,10 +171,14 @@ class AccessibilityModel:
 
             svd_pipeline = Pipeline([
                 ('tfidf', TfidfTransformer()),
-                ('svd', TruncatedSVD(n_components= max(128, 3*self.num_topics))),
+                ('svd', TruncatedSVD(n_components= max(500, 3*self.num_topics))),
             ])
 
+            logger.info('Fitting LSI pipeline.')
             svd_pipeline.fit(X_matrix)
+
+            self.projection_matrix_ = self._get_projection_matrix(svd_pipeline)
+
             return svd_pipeline
         else:
             return self._svd_pipeline

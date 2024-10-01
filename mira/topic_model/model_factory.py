@@ -7,7 +7,7 @@ from mira.topic_model.generative_models.dirichlet_process import \
 from mira.topic_model.generative_models.lda_generative import \
         ExpressionDirichletModel, AccessibilityDirichletModel
 
-from mira.topic_model.base import BaseModel, logger
+from mira.topic_model.base import BaseModel, ProjectionModelMixin, logger
 from mira.topic_model.base import TopicModel as mira_topic_model
 import numpy as np
 from torch import load, device
@@ -75,6 +75,7 @@ def make_model(
     continuous_covariates = None,
     covariates_keys = None,
     extra_features_keys = None,
+    projection_decoder=False,
     **model_parameters,
 ):
     '''
@@ -241,6 +242,8 @@ def make_model(
         baseclass = CovariateModel
     else:
         baseclass = BaseModel
+        
+    extra_mixins = [ProjectionModelMixin] if projection_decoder else []
 
     if feature_type == 'expression':
         feature_model = ExpressionModel
@@ -251,7 +254,7 @@ def make_model(
 
     _class = type(
         '_'.join(['dirichlet', feature_type, basename]),
-        (generative_model, feature_model, baseclass, mira_topic_model),
+        (generative_model, feature_model, *extra_mixins,baseclass, mira_topic_model),
         {}
     )
 

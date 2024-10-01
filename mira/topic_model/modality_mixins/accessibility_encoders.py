@@ -144,7 +144,7 @@ class LSIEncoder(EncoderBase):
         output_batchnorm_size = 2*num_topics
         self.num_topics = num_topics
         self.fc_layers = get_fc_stack(
-            layer_dims = [max(128, 3*self.num_topics) + 1 + num_covariates + num_extra_features, 
+            layer_dims = [max(500, 3*self.num_topics) + 1 + num_covariates + num_extra_features, 
             embedding_size, *[hidden]*(num_layers-2), output_batchnorm_size],
             dropout = dropout, skip_nonlin = True
         )

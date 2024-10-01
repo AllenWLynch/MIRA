@@ -140,7 +140,7 @@ class CovariateModel(BaseModel):
 
         self.dependence_network = self.dependence_model(
             self.dependence_model.get_statistics_network(
-                2*self.num_exog_features, 
+                2*self.decoder.beta.out_features, 
                 self.dependence_hidden
             ),
             self.marginal_estimation_size
