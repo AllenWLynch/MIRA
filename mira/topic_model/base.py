@@ -207,12 +207,13 @@ class ProjectionDecoder(nn.Module):
         num_topics, 
         num_covariates, 
         topics_dropout, 
-        projection_matrix
+        embedding_matrix,
+        is_trainable,
     ):
         super().__init__()
 
-        assert projection_matrix.shape[1] == num_exog_features
-        projection_dim = projection_matrix.shape[0]
+        assert embedding_matrix.shape[1] == num_exog_features
+        projection_dim = embedding_matrix.shape[0]
 
         self.beta = nn.Linear(num_topics, projection_dim, bias = False)
         self.bn = nn.BatchNorm1d(projection_dim)
@@ -243,7 +244,7 @@ class ProjectionDecoder(nn.Module):
                 torch.zeros(projection_dim)
             )
 
-        self.projection_matrix = torch.Tensor(projection_matrix)\
+        self.projection_matrix = torch.Tensor(embedding_matrix)\
                                     .requires_grad_(False)
 
 
@@ -356,7 +357,7 @@ class DataCache:
                 self.rm_cache()
                 os.mkdir(self.get_cache_path())
             else:
-                logger.warn('Cache already exists for this dataset, skipping writing step. If you wish to overwrite, \n'
+                logger.warning('Cache already exists for this dataset, skipping writing step. If you wish to overwrite, \n'
                             'pass "overwrite = True" to this method.')
                 return self.train_cache, self.test_cache
         else:
@@ -577,7 +578,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             (covar - mean)/std
         ).astype(int)
 
-        return np.clip(standardized, -3, 3)
+        return np.clip(standardized, -2, 2)
 
 
     def train_test_split(self, adata,
@@ -788,7 +789,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self.device = torch.device('cuda:0' if use_cuda else 'cpu')
         if not use_cuda:
             if not inference_mode:
-                logger.warn('Cuda unavailable. Will not use GPU speedup while training.')
+                logger.warning('Cuda unavailable. Will not use GPU speedup while training.')
             else:
                 logger.info('Moving model to CPU for inference.')
 
@@ -1943,7 +1944,7 @@ class ProjectionModelMixin:
         def instantiate_decoder(**kwargs):
             return ProjectionDecoder(
                     **kwargs, 
-                    projection_matrix=self.projection_matrix_
+                    embedding_matrix=self.projection_matrix_
                 )
         return instantiate_decoder
     

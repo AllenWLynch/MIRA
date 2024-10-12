@@ -131,7 +131,9 @@ class AccessibilityModel:
             if not isspmatrix(X):
                 X = sparse.csr_matrix(X)
 
-            return self._svd_pipeline.transform(X)
+            return self._svd_pipeline\
+                        .transform(X)\
+                        .astype(np.float32)
         
         else:
             return self._get_padded_idx_matrix(
@@ -156,7 +158,7 @@ class AccessibilityModel:
 
         try:
             self._svd_pipeline
-            logger.warn('LSI projection already calculated. Using the old projection.')
+            logger.warning('LSI projection already calculated. Using the old projection.')
         except AttributeError:
             
             logger.info('Calculating LSI projection of data for "light" encoder model.')           

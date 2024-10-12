@@ -97,7 +97,7 @@ class Redis(RedisStorage):
     @property
     def _redis(self):
         return redis.Redis.from_url(self._url)
-
+    
 
 class Locker:
 

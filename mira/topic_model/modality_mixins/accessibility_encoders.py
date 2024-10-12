@@ -29,8 +29,12 @@ class EncoderBase(nn.Module):
 
 class DANEncoder(EncoderBase):
 
-    def __init__(self, embedding_size = None, *,num_endog_features, num_topics, embedding_dropout,
-        hidden, dropout, num_layers, num_exog_features, num_covariates, num_extra_features):
+    def __init__(self, 
+        embedding_size = None,
+        *,
+        num_endog_features, num_topics, embedding_dropout,
+        hidden, dropout, num_layers, num_exog_features, num_covariates, num_extra_features,
+        ):
         super().__init__()
 
         if embedding_size is None:

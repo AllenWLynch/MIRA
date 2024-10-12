@@ -52,6 +52,13 @@ def gradient_tune(model, data, max_attempts = 3, max_topics = None):
             max_learning_rate = 0.1,
         )
 
+        try:
+            _dp_model._svd_pipeline = model._svd_pipeline
+            _dp_model.projection_matrix_ = model.projection_matrix_
+            logger.info('Transferring SVD transformer ...')
+        except AttributeError:
+            pass
+
         del train_meta
 
         for _ in range(max_attempts):
