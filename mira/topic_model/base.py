@@ -198,118 +198,6 @@ class Decoder(nn.Module):
         ).exp().sum(-1)
     
 
-class ProjectionDecoder(nn.Module):
-    
-    def __init__(self, covariates_hidden = 32,
-        covariates_dropout = 0.05, mask_dropout = 0.05,
-        *,
-        num_exog_features, 
-        num_topics, 
-        num_covariates, 
-        topics_dropout, 
-        embedding_matrix,
-        is_trainable,
-    ):
-        super().__init__()
-
-        assert embedding_matrix.shape[1] == num_exog_features
-        projection_dim = embedding_matrix.shape[0]
-
-        self.beta = nn.Linear(num_topics, projection_dim, bias = False)
-        self.bn = nn.BatchNorm1d(projection_dim)
-        self.overall_bn = nn.BatchNorm1d(num_exog_features)
-
-        self.drop1 = nn.Dropout(covariates_dropout)
-        self.drop2 = nn.Dropout(topics_dropout)
-        self.mask_drop = partial(_mask_drop, dropout_rate = mask_dropout)
-
-        self.num_topics = num_topics
-        self.num_covariates = num_covariates
-
-        if num_covariates > 0:
-
-            self.batch_effect_model = nn.Sequential(
-                ConcatLayer(1),
-                encoder_layer(
-                    num_topics + num_covariates, 
-                    covariates_hidden, 
-                    dropout=covariates_dropout, 
-                    nonlin=True
-                ),
-                nn.Linear(covariates_hidden, projection_dim),
-                nn.BatchNorm1d(projection_dim, affine = False),
-            )
-
-            self.batch_effect_gamma = nn.Parameter(
-                torch.zeros(projection_dim)
-            )
-
-        self.projection_matrix = torch.Tensor(embedding_matrix)\
-                                    .requires_grad_(False)
-
-
-    @property
-    def is_correcting(self):
-        return self.num_covariates > 0
-
-
-    def forward(self, theta, covariates, nullify_covariates = False):
-        
-        X1 = self.drop1(theta)
-        X2 = self.drop2(theta)
-        
-        if self.is_correcting:
-            
-            self.covariate_signal = self._get_batch_effect_lowdim(X1, covariates, 
-                nullify_covariates = nullify_covariates)
-
-            self.biological_signal = self._get_biological_effect_lowdim(X1)
-
-        return F.softmax(
-                    self.project(
-                        self._get_biological_effect_lowdim(X2) + \
-                        self.mask_drop(
-                            self._get_batch_effect_lowdim(X2, covariates, nullify_covariates = nullify_covariates), 
-                            training = self.training
-                        )
-                    ),
-                    dim=1
-                )
-    
-    def project(self, X):
-        return self.overall_bn(X @ self.projection_matrix)
-    
-    def get_topic_activations(self):
-        X = torch.eye(self.num_topics).to(self.beta.weight.device)
-        return self.get_biological_effect(X).detach().cpu().numpy()
-
-    def _get_biological_effect_lowdim(self, theta):
-        return self.bn(self.beta(theta))
-
-    def _get_batch_effect_lowdim(self, theta, covariates, nullify_covariates = False):
-        
-        if not self.is_correcting or nullify_covariates: 
-            batch_effect = theta.new_zeros(1)
-            batch_effect.requires_grad = False
-        else:
-            batch_effect = self.batch_effect_gamma * self.batch_effect_model(
-                    (theta, covariates)
-                )
-
-        return batch_effect
-    
-    def get_biological_effect(self, theta):
-        return self.project(self._get_biological_effect_lowdim(theta))
-    
-    def get_batch_effect(self, theta, covariates, nullify_covariates = False):
-        return self.project(self._get_batch_effect_lowdim(theta, covariates, nullify_covariates = nullify_covariates))
-
-    def get_softmax_denom(self, theta, covariates, include_batcheffects = True):
-        return self.project(
-            self._get_biological_effect_lowdim(theta) + \
-            self._get_batch_effect_lowdim(theta, covariates, nullify_covariates = not include_batcheffects)
-        ).exp().sum(-1)
-
 
 class ModelParamError(ValueError):
     pass
@@ -388,6 +276,9 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
     def _get_decoder_model(self):
         return Decoder
+    
+    def _get_encoder_model(self):
+        raise NotImplementedError('Must implement encoder model in subclass')
     
     @classmethod
     def load(cls, filename):
@@ -815,7 +706,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             **decoder_kwargs,
         )
 
-        self.encoder = self.encoder_model(
+        self.encoder = self._get_encoder_model()(
             embedding_size = self.embedding_size,
             num_endog_features = num_endog_features, 
             num_exog_features = num_exog_features,
@@ -1936,20 +1827,3 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
         '''
         return ['topic_' + str(i) for i in range(self.num_topics)]
-
-
-class ProjectionModelMixin:
-
-    def _get_decoder_model(self):
-        def instantiate_decoder(**kwargs):
-            return ProjectionDecoder(
-                    **kwargs, 
-                    embedding_matrix=self.projection_matrix_
-                )
-        return instantiate_decoder
-    
-
-    def _get_save_data(self):
-        data = super()._get_save_data()
-        data['fit_params']['projection_matrix_'] = self.projection_matrix_
-        return data

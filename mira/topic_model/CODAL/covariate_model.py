@@ -22,7 +22,7 @@ def docstring_wrapper(value):
 
     return inner
 
-class CovariateModel(BaseModel):
+class CovariateModel:
 
     def __init__(self, endogenous_key = None,
             exogenous_key = None,

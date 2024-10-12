@@ -1,4 +1,4 @@
-
+from functools import partial
 import numpy as np
 import pyro
 import torch
@@ -14,7 +14,8 @@ import mira.adata_interface.regulators as ri
 from mira.plots.factor_influence_plot import plot_factor_influence
 from mira.topic_model.modality_mixins.accessibility_encoders import \
         DANEncoder, DANSkipEncoder, LSIEncoder
-from mira.topic_model.base import logger
+from mira.topic_model.embedded_topic_model_base import LSIEmbeddingModel
+
 
 class ZeroPaddedBinaryMultinomial(pyro.distributions.Multinomial):
     
@@ -62,13 +63,11 @@ class AccessibilityModel:
     def peaks(self):
         return self.features
 
-    @property
-    def encoder_model(self):
+    def _get_encoder_model(self):
 
         encoder_map = {
             'skipDAN' : DANSkipEncoder,
             'DAN' : DANEncoder,
-            'light' : LSIEncoder,
         }
 
         try:
@@ -125,108 +124,16 @@ class AccessibilityModel:
 
 
     def preprocess_endog(self, X):
-
-        if self.atac_encoder == 'light':
-
-            if not isspmatrix(X):
-                X = sparse.csr_matrix(X)
-
-            return self._svd_pipeline\
-                        .transform(X)\
-                        .astype(np.float32)
-        
-        else:
-            return self._get_padded_idx_matrix(
-                    self._binarize_matrix(X)
-                ).astype(np.int32)
+        return self._get_padded_idx_matrix(
+                self._binarize_matrix(X)
+            ).astype(np.int32)
     
 
     def preprocess_exog(self, X):
 
         return self._get_padded_idx_matrix(
                 self._binarize_matrix(X)
-            ).astype(np.int64)
-    
-
-    def _get_projection_matrix(self, svd_pipeline):
-        tfidf = svd_pipeline.steps[0][1]
-        svd = svd_pipeline.steps[1][1]
-        return svd.components_ * 1/tfidf.idf_[None,:] * svd.singular_values_[:,None]
-    
-
-    def _get_lsi_projection(self, dataset):
-
-        try:
-            self._svd_pipeline
-            logger.warning('LSI projection already calculated. Using the old projection.')
-        except AttributeError:
-            
-            logger.info('Calculating LSI projection of data for "light" encoder model.')           
-            X_matrix = sparse.vstack([
-                x['endog_features']
-                for x in dataset
-            ])
-
-            from sklearn.feature_extraction.text import TfidfTransformer
-            from sklearn.pipeline import Pipeline
-            from sklearn.decomposition import TruncatedSVD
-
-            svd_pipeline = Pipeline([
-                ('tfidf', TfidfTransformer()),
-                ('svd', TruncatedSVD(n_components= max(500, 3*self.num_topics))),
-            ])
-
-            logger.info('Fitting LSI pipeline.')
-            svd_pipeline.fit(X_matrix)
-
-            self.projection_matrix_ = self._get_projection_matrix(svd_pipeline)
-
-            return svd_pipeline
-        else:
-            return self._svd_pipeline
-        
-    
-
-    def _get_dataset_statistics(self, dataset, training_bar = True):
-        super()._get_dataset_statistics(dataset, training_bar = training_bar)
-
-        if self.atac_encoder == 'light':
-            self._svd_pipeline = self._get_lsi_projection(dataset)
-        
-
-    def _get_save_data(self):
-        data = super()._get_save_data()
-        
-        if self.atac_encoder == 'light':
-            data['fit_params']['_svd_pipeline'] = self._svd_pipeline
-
-        return data
-
-    '''
-    def _dense_counts_matrix(self, accessibility_matrix):
-
-        width = int((accessibility_matrix > 0).sum(-1).max())
-
-        dense_matrix = []
-        for i in range(accessibility_matrix.shape[0]):
-            row = accessibility_matrix[i,:].data
-            if len(row) == width:
-                dense_matrix.append(np.array(row)[np.newaxis, :])
-            else:
-                dense_matrix.append(np.concatenate([np.array(row), np.zeros(width - len(row))])[np.newaxis, :]) #0-pad tail to "width"
-
-        dense_matrix = np.vstack(dense_matrix)
-        
-        return dense_matrix
-    
-    def preprocess_endog(self, X):
-        
-        return self._get_padded_idx_matrix(X).astype(np.int64)
-                   
-
-    def preprocess_exog(self, X):
-
-        return self._dense_counts_matrix(X).astype(np.int64)'''
+            ).astype(np.int64)        
 
 
     def _argsort_peaks(self, topic_num):
@@ -482,3 +389,12 @@ class AccessibilityModel:
             na_color = na_color, max_label_repeats = max_label_repeats, figsize=figsize,
             axlabels = ('Topic {} Enrichments'.format(str(topic_1)),'Todule {} Enrichments'.format(str(topic_2))), 
             fontsize = fontsize, color = color)
+
+
+class AccessibilityLSIModel(LSIEmbeddingModel):
+    '''
+    The last element of a the LSI model is the encoder. Since the encoder is
+    specialized to the data mode, we must define it here.
+    '''
+    def _get_encoder_model(self):
+        return partial(LSIEncoder, input_dim = self.lsi_dim)

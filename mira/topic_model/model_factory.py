@@ -1,14 +1,16 @@
-from mira.topic_model.modality_mixins.accessibility_model import AccessibilityModel
+from mira.topic_model.modality_mixins.accessibility_model import AccessibilityModel, AccessibilityLSIModel
 from mira.topic_model.modality_mixins.expression_model import ExpressionModel
 
 from mira.topic_model.CODAL.covariate_model import CovariateModel
 from mira.topic_model.generative_models.dirichlet_process import \
         ExpressionDirichletProcessModel, AccessibilityDirichletProcessModel
+
 from mira.topic_model.generative_models.lda_generative import \
         ExpressionDirichletModel, AccessibilityDirichletModel
 
-from mira.topic_model.base import BaseModel, ProjectionModelMixin, logger
+from mira.topic_model.base import BaseModel, logger
 from mira.topic_model.base import TopicModel as mira_topic_model
+
 import numpy as np
 from torch import load, device
 from torch.cuda import is_available as gpu_available
@@ -75,7 +77,7 @@ def make_model(
     continuous_covariates = None,
     covariates_keys = None,
     extra_features_keys = None,
-    projection_decoder=False,
+    embedding_mode=None,
     **model_parameters,
 ):
     '''
@@ -237,24 +239,26 @@ def make_model(
     assert(feature_type in ['expression','accessibility'])
 
     basename = 'model'
+    is_expression = feature_type == 'expression'
+
+    composition = [mira_topic_model, BaseModel]
     if not all([c is None for c in [categorical_covariates, continuous_covariates, covariates_keys]]):
         basename = 'covariate-model'
-        baseclass = CovariateModel
-    else:
-        baseclass = BaseModel
-        
-    extra_mixins = [ProjectionModelMixin] if projection_decoder else []
+        composition.append(CovariateModel)
+    
+    composition.append(ExpressionModel if is_expression else AccessibilityModel)
 
-    if feature_type == 'expression':
-        feature_model = ExpressionModel
-        generative_model = ExpressionDirichletModel
-    elif feature_type == 'accessibility':
-        feature_model = AccessibilityModel
-        generative_model = AccessibilityDirichletModel
+    if embedding_mode == 'lsi':
+        if is_expression:
+            raise ValueError('LSI embeddings are only supported for ATAC data')
+        basename = 'embedded_' + basename
+        composition.append(AccessibilityLSIModel)
+
+    composition.append(ExpressionDirichletModel if is_expression else AccessibilityDirichletModel)
 
     _class = type(
         '_'.join(['dirichlet', feature_type, basename]),
-        (generative_model, feature_model, *extra_mixins,baseclass, mira_topic_model),
+        tuple(reversed(composition)),
         {}
     )
 
@@ -286,8 +290,8 @@ def make_model(
     if feature_type == 'accessibility' and \
         not gpu_available() and not instance.atac_encoder == 'light':
         
-        logger.error('If a GPU is unavailable, one cannot use the "skipDAN" or "DAN" encoders for the ATAC model since training will be impossibly slow.'
-                     'Use a GPU, or switch the "atac_encoder" option to "light", which does not require a GPU.'
+        logger.error('If a GPU is unavailable, one cannot use the "skipDAN" or "DAN" encoders for the ATAC model since training will be impossibly slow.\n'
+                     'Use a GPU, or switch the "embedding_mode" option to "lsi", which does not require a GPU.'
                     )
 
     return instance

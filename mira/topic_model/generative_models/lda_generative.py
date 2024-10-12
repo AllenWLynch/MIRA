@@ -171,10 +171,10 @@ class AccessibilityDirichletModel(DirichletMarginals):
                     'obs', ZeroPaddedBinaryMultinomial(total_count = 1, probs = peak_probs), obs = exog_features,
                 )
                 #else:
-                    #print('here')
                 #    pyro.sample(
                 #        'obs', ZeroPaddedMultinomial(probs = peak_probs, validate_args = False), obs = (exog_features, endog_features),
-               #     )
+                #     )
+
 
     @scope(prefix = 'atac')
     def guide(self, *, endog_features, exog_features, read_depth, covariates, 

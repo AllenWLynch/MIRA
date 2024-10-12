@@ -133,12 +133,10 @@ class DANSkipEncoder(EncoderBase):
         return theta_loc, theta_scale
 
 
-
 class LSIEncoder(EncoderBase):
 
-    n_pcs = 100
-
-    def __init__(self, embedding_size = None,*, num_endog_features, num_topics, embedding_dropout,
+    def __init__(self, embedding_size = None,*, input_dim, 
+        num_endog_features, num_topics, embedding_dropout,
         hidden, dropout, num_layers, num_exog_features, num_covariates, num_extra_features):
         super().__init__()
 
@@ -148,7 +146,7 @@ class LSIEncoder(EncoderBase):
         output_batchnorm_size = 2*num_topics
         self.num_topics = num_topics
         self.fc_layers = get_fc_stack(
-            layer_dims = [max(500, 3*self.num_topics) + 1 + num_covariates + num_extra_features, 
+            layer_dims = [input_dim + 1 + num_covariates + num_extra_features, 
             embedding_size, *[hidden]*(num_layers-2), output_batchnorm_size],
             dropout = dropout, skip_nonlin = True
         )

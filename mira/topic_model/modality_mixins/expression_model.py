@@ -90,11 +90,12 @@ class ExpressionEncoder(torch.nn.Module):
 
 class ExpressionModel:
 
-    encoder_model = ExpressionEncoder
-
     @property
     def genes(self):
         return self.features
+    
+    def _get_encoder_model(self):
+        return ExpressionEncoder
 
     @staticmethod
     def _residual_transform(y_ij, pi_j_hat, n_bar):
