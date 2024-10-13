@@ -157,8 +157,18 @@ class AccessibilityDirichletModel(DirichletMarginals):
                         "theta", dist.LogNormal(theta_loc, theta_scale).to_event(1)
                     )
 
-                theta = theta/theta.sum(-1, keepdim = True)            
-                peak_probs = self.decoder(theta, covariates)
+                theta = theta/theta.sum(-1, keepdim = True)
+
+                # CLIFF: I added an extra parameter to the decoder function,
+                # the output from the last output layer of the encoder.
+                # This is used by the batch effect model instead of the topic compositions
+                
+                # See `accessibility_encoders` for the implementation of tracking this intermediate output
+                # it's quite an easy addition 
+                
+                # TODO: Test if this works better than the previous implementation
+                # maybe it works better for RNA too, but I'm not sure
+                peak_probs = self.decoder(theta, covariates, self.encoder.intermediate_output)
                 
                 pyro.sample(
                     'obs', ZeroPaddedBinaryMultinomial(total_count = 1, probs = peak_probs), obs = exog_features,

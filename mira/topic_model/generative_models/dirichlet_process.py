@@ -233,16 +233,12 @@ class AccessibilityDirichletProcessModel(DPModel):
                     
                     
                 theta = mix_weights(theta[:,:-1])
-                peak_probs = self.decoder(theta, covariates)
+                peak_probs = self.decoder(theta, covariates, self.encoder.intermediate_output)
                 
-                if self.count_model == 'binary':
-                    pyro.sample(
-                        'obs', ZeroPaddedBinaryMultinomial(total_count = 1, probs = peak_probs), obs = exog_features,
-                    )
-                else:
-                    pyro.sample(
-                        'obs', ZeroPaddedMultinomial(probs = peak_probs, validate_args = False), obs = (exog_features, endog_features),
-                    )
+                pyro.sample(
+                    'obs', ZeroPaddedBinaryMultinomial(total_count = 1, probs = peak_probs), obs = exog_features,
+                )
+                
 
 
 

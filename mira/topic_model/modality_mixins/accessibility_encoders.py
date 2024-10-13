@@ -52,6 +52,17 @@ class DANEncoder(EncoderBase):
             dropout = dropout, skip_nonlin = True
         )
 
+        self.fc_layers[-2].register_forward_hook(self.hook_intermediate_output)
+
+
+    def hook_intermediate_output(self, module, input, output):
+        self.intermediate_output_ = output
+
+    @property
+    def intermediate_output(self):
+        return self.intermediate_output_
+
+
     def forward(self, idx, read_depth, covariates, extra_features):
        
         if self.training:
@@ -75,7 +86,7 @@ class DANEncoder(EncoderBase):
         theta_scale = F.softplus(X[:, self.num_topics:(2*self.num_topics)])  
 
         return theta_loc, theta_scale
-
+    
 
 
 class DANSkipEncoder(EncoderBase):
@@ -108,6 +119,16 @@ class DANSkipEncoder(EncoderBase):
             dropout = dropout, 
             skip_nonlin = False
         )
+
+        self.fc_layers[-1].register_forward_hook(self.hook_intermediate_output)
+
+
+    def hook_intermediate_output(self, module, input, output):
+        self.intermediate_output_ = output
+
+    @property
+    def intermediate_output(self):
+        return self.intermediate_output_
 
 
     def forward(self, idx, read_depth, covariates, extra_features):

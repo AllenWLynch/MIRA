@@ -67,6 +67,9 @@ class AccessibilityTopicModel(AccessibilityDirichletModel, AccessibilityModel, B
         raise NotImplementedError('This is a faux class used for documentation purposes. Please instantiate a topic model using "mira.topics.make_model(...)"')
 
 
+# CLIFF: I added the `feature_embeddings_key` to this function.
+# If you set it to `LSI`, it will use LSI embeddings of the data for the ATAC model.
+# If you set it to some other string, it will look for that key in the `adata.varm`.
 def make_model(
     n_samples, n_features,*,
     feature_type,

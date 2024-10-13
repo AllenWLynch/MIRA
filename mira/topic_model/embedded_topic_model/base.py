@@ -11,8 +11,28 @@ from mira.topic_model.modality_mixins.accessibility_encoders import LSIEncoder, 
 from mira.topic_model.embedded_topic_model.lsi_embed import PointwiseMutualInfoTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfTransformer
 
-
+# CLIFF: 
+# New implementation of the embedded topic model
+# The `ProjectionDecoder` class is the decoder model which takes a fixed embedding matrix.
+# 
+# In this current implementation,
+# I am passing an hidden layer output from the encoder to the batch effect model as well as the topic compositions (intermediate).
+# I did this because I thought there could be some technical signal in the counts which is not explained by only cell type 
+# and batch label - think of an orthogonal stochastic process - like in some cells the Tn5 transposase acts a little differently.
+# With this change, the encoder can pass some information directly to the batch effect model, bypassing the biological latent space.
+# I only tried this on one dataset and it didn't seem to make a difference, but it could be worth exploring.
+# 
+# Essentially, the peak embeddings cannot be trained because the inner products take too much time to compute, so 
+# whichever embeddings are chosen should be pretty good - I think concatenating the Cistrome and dataset-specific embeddings could
+# work pretty well.
+#
+# Another difference between what I've implemented and the Blei paper is that I'm using "ProdEmbeddedTopicModel" - e.g.
+# I do the projection in log-space, sum across the topics, then do the softmax. This is inline with the original implementation
+# and the ProdLDA paper. I did it this way mostly for consistency, but I think there are some compelling reasons to favor 
+# the ProdLDA approach. I can outline some geometric reasons in the future.
+#
 class ProjectionDecoder(nn.Module):
     
     def __init__(self, 
@@ -25,7 +45,7 @@ class ProjectionDecoder(nn.Module):
         num_covariates, 
         topics_dropout, 
         embedding_matrix,
-        is_trainable,
+        is_trainable, # you don't need to train the decoder embeddings so ignore.
     ):
         super().__init__()
 
@@ -69,7 +89,7 @@ class ProjectionDecoder(nn.Module):
         return self.num_covariates > 0
 
 
-    def forward(self, theta, covariates, nullify_covariates = False):
+    def forward(self, theta, covariates, intermediate, nullify_covariates = False):
         
         X1 = self.drop1(theta)
         X2 = self.drop2(theta)
@@ -112,23 +132,26 @@ class ProjectionDecoder(nn.Module):
             batch_effect = self.batch_effect_gamma * self.batch_effect_model(
                     (theta, covariates)
                 )
-
         return batch_effect
     
     def get_biological_effect(self, theta):
         return self.project(self._get_biological_effect_lowdim(theta))
     
-    def get_batch_effect(self, theta, covariates, nullify_covariates = False):
+    def get_batch_effect(self, theta, covariates, intermediate, nullify_covariates = False):
         return self.project(self._get_batch_effect_lowdim(theta, covariates, nullify_covariates = nullify_covariates))
 
-    def get_softmax_denom(self, theta, covariates, include_batcheffects = True):
+    def get_softmax_denom(self, theta, covariates, intermediate, include_batcheffects = True):
         return self.project(
             self._get_biological_effect_lowdim(theta) + \
             self._get_batch_effect_lowdim(theta, covariates, nullify_covariates = not include_batcheffects)
         ).exp().sum(-1)
 
 
-
+# CLIFF:
+# This is the main class for the embedded topic model. When this is mixed in with the base topic model,
+# it tweaks the encoder and decoder models to use the embeddings. It also adds a method to "fit" the embeddings.
+# The process of fitting could be using PMI-SVD, downloading them from Cistrome, etc.
+#
 class EmbeddedModelMixin:
 
     def _get_decoder_model(self):
@@ -168,7 +191,8 @@ class EmbeddedModelMixin:
 
         return data
     
-
+ 
+# CLIFF: The specialization to use PMI-SVD for the embeddings calculated *from the data*.
 class LSIEmbeddingModel(EmbeddedModelMixin):
     '''
     Like the "Base" topic model, this class is agnostic to the modality of the data.
@@ -181,24 +205,40 @@ class LSIEmbeddingModel(EmbeddedModelMixin):
     
 
     def _fit_embeddings(self, dataset, **feature_attrs):
-        
-        def _get_embeddings(svd_pipeline, alpha=0.5):
-            svd = svd_pipeline.steps[1][1]
-            # Take the power of the diagonal elements of S
-            S_alpha = np.power(svd.singular_values_, alpha)
-            embeds = S_alpha[:,None] * svd.components_
-
-            return embeds / np.linalg.norm(embeds, axis=0, keepdims=True)
-        
 
         X_matrix = sparse.vstack([
             x['endog_features']
             for x in dataset
         ])
 
+        '''def _get_embeddings(svd_pipeline, alpha=0.5):
+            svd = svd_pipeline.steps[1][1]
+            # Take the power of the diagonal elements of S
+            S_alpha = np.power(svd.singular_values_, alpha)
+            embeds = S_alpha[:,None] * svd.components_
+
+            return embeds / np.linalg.norm(embeds, axis=0, keepdims=True)
+
         svd_pipeline = Pipeline([
             ('tfidf', PointwiseMutualInfoTransformer()),
-            ('svd', TruncatedSVD(n_components= self.lsi_dim)),
+            ('svd', TruncatedSVD(n_components= self.lsi_dim, random_state=42)),
+        ])'''
+        
+        # CLIFF: this is how I calculate the embeddings from the data.
+        # There are probably a bunch of ways to do this, not clearn which is the best.
+        # Empirically, this way seems to work well.
+        # Above is another way to go about it based on your repo...
+        def _get_embeddings(svd_pipeline):
+            
+            tfidf = svd_pipeline.steps[0][1]
+            svd = svd_pipeline.steps[1][1]
+            embeds = svd.singular_values_[:,None] * svd.components_ * 1/tfidf.idf_[None,:]
+            #return embeds/np.linalg.norm(embeds, axis=0, keepdims=True)
+            return embeds
+
+        svd_pipeline = Pipeline([
+            ('tfidf', TfidfTransformer()),
+            ('svd', TruncatedSVD(n_components= self.lsi_dim, random_state=1776)),
         ])
 
         logger.info('Fitting LSI pipeline.')
@@ -221,6 +261,12 @@ class LSIEmbeddingModel(EmbeddedModelMixin):
     
 
 
+# CLIFF: A customized encoder model to partially use pre-trained embeddings.
+# The `MixedEmbeddingEncoder` class is a wrapper around some base encoder model.
+# It takes a pre-trained embedding matrix and uses it to transform the in-vocab features.
+# The out-of-vocab features are passed directly to the base encoder model.
+# Finally, the transformed in-vocab features are concatenated with the `extra features` 
+# and passed to the base encoder model.
 class MixedEmbeddingEncoder(nn.Module):
     
     def __init__(self,
@@ -242,9 +288,11 @@ class MixedEmbeddingEncoder(nn.Module):
         padded_embedding_matrix = np.hstack([np.zeros((dim, 1)), embedding_matrix])
         self.pretrained_embedding.weight = nn.Parameter(torch.Tensor(padded_embedding_matrix.T))
         
-        # Experiment with this - I've found that it's better to allow the model to learn the embeddings
+        # TODO: Experiment with this - I've found that it's better to allow the model to learn the embeddings
         # - the pretrained embeddings are not directly suited for the DAN model.
         self.pretrained_embedding.requires_grad_(True)
+        # this sort of defeats the purpose of the separated embeddings, but you need this class to do these 
+        # experiments.
 
         self.base_encoder = base_encoder(
             num_endog_features = oov_size,
@@ -253,6 +301,10 @@ class MixedEmbeddingEncoder(nn.Module):
             # and uses the transformed pretrained embeddings as "extra features".
             **encoder_kwargs
         )
+
+    @property
+    def intermediate_output(self):
+        return self.base_encoder.intermediate_output
 
     def split_X(self, X, extra_features):
         (iv, oov) = X # iv : in_vocab, oov : out_of_vocab
@@ -273,6 +325,11 @@ class MixedEmbeddingEncoder(nn.Module):
         return self.base_encoder.sample_posterior(oov, read_depth, covariates, iv, n_samples = n_samples)
 
 
+# CLIFF: This is a specialized model which uses pre-trained embeddings which are 
+# stored in the AnnData object.
+#
+# pass the varm key with the embeddings as the `feature_embeddings_key` argument.
+#
 class PretrainedEmbeddingModel(EmbeddedModelMixin):
     '''
     Like the "Base" topic model, this class is agnostic to the modality of the data.
@@ -295,7 +352,8 @@ class PretrainedEmbeddingModel(EmbeddedModelMixin):
                     ):
         return (
             feature_embeddings,
-            trainable_embeddings,
+            trainable_embeddings, # the mask vector marks all of the embeddings which are all 0 as `TRUE`
+                                  # so unknown embeddings should be set to 0s in the AnnData.
             None,
         )
 

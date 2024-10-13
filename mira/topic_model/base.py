@@ -810,6 +810,21 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self._features = f
 
 
+    # CLIFF:
+    # I made some changes here that increase the flexibility of the information that 
+    # one can pass into the model. "feature_attrs" is a dictionary that can contain
+    # any information that we need. In the past, this was just the names of the features
+    # to model, but now it may also contain feature embeddings, whether they are trainable,
+    # and feature level covariates.
+    # 
+    # The feature_attrs are propogated through the model instantiation and the dataset
+    # summarization.
+    # To see this in action, look at the `_get_dataset_statistics` method in the embedded 
+    # topic model class.
+    #
+    # TODO: implement feature level covariate transformation and integration into the technical
+    # effect decoder.
+    # 
     def _instantiate_model(self, training_bar = True,*, 
                            features, 
                            highly_variable, 
