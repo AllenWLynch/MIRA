@@ -14,7 +14,6 @@ import mira.adata_interface.regulators as ri
 from mira.plots.factor_influence_plot import plot_factor_influence
 from mira.topic_model.modality_mixins.accessibility_encoders import \
         DANEncoder, DANSkipEncoder, LSIEncoder
-from mira.topic_model.embedded_topic_model_base import LSIEmbeddingModel
 
 
 class ZeroPaddedBinaryMultinomial(pyro.distributions.Multinomial):
@@ -389,12 +388,3 @@ class AccessibilityModel:
             na_color = na_color, max_label_repeats = max_label_repeats, figsize=figsize,
             axlabels = ('Topic {} Enrichments'.format(str(topic_1)),'Todule {} Enrichments'.format(str(topic_2))), 
             fontsize = fontsize, color = color)
-
-
-class AccessibilityLSIModel(LSIEmbeddingModel):
-    '''
-    The last element of a the LSI model is the encoder. Since the encoder is
-    specialized to the data mode, we must define it here.
-    '''
-    def _get_encoder_model(self):
-        return partial(LSIEncoder, input_dim = self.lsi_dim)

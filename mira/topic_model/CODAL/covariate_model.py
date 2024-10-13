@@ -31,6 +31,8 @@ class CovariateModel:
             categorical_covariates = None,
             continuous_covariates = None,
             extra_features_keys = None,
+            feature_covariates_keys = None,
+            feature_embeddings_key = None,
             num_topics = 16,
             hidden = 128,
             num_layers = 3,
@@ -105,6 +107,8 @@ class CovariateModel:
         self.marginal_estimation_size = marginal_estimation_size
         self.cost_beta = cost_beta
         self.atac_encoder = atac_encoder
+        self.feature_covariates_keys = feature_covariates_keys
+        self.feature_embeddings_key = feature_embeddings_key
 
 
     def _recommend_num_layers(self, n_samples):
@@ -120,7 +124,9 @@ class CovariateModel:
         else:
             return 1.
 
-    def _get_weights(self, on_gpu = True, inference_mode = False,*,
+    
+    def _get_weights(self, 
+            on_gpu = True, inference_mode = False,*,
             num_exog_features, num_endog_features, 
             num_covariates, num_extra_features):
 
@@ -298,15 +304,15 @@ class CovariateModel:
 
     @docstring_wrapper(BaseModel.get_learning_rate_bounds.__doc__)
     @adi.wraps_modelfunc(fetch = tmi.fit, 
-        fill_kwargs=['features','highly_variable','dataset'],
+        fill_kwargs=['feature_attrs','dataset'],
         requires_adata = False)
     def get_learning_rate_bounds(self, num_steps = 100, 
         num_epochs = 3, eval_every = 3, 
         lower_bound_lr = 1e-6, upper_bound_lr = 1,*,
-        features, highly_variable, dataset):
+        feature_attrs, dataset):
         
         self._instantiate_model(
-            features = features, highly_variable = highly_variable,
+            **feature_attrs,
             dataset = dataset,
         )
 
@@ -379,12 +385,13 @@ class CovariateModel:
 
 
     def _fit(self, writer = None, training_bar = True, reinit = True, log_every = 10,*,
-            dataset, features, highly_variable):
+            dataset, feature_attrs):
         
         if reinit:
             self._instantiate_model(
-                features = features, highly_variable = highly_variable, 
-                dataset = dataset, training_bar = training_bar,
+                **feature_attrs, 
+                dataset = dataset, 
+                training_bar = training_bar,
             )
 
         early_stopper = EarlyStopping(tolerance=3, patience=1e-4, convergence_check=False)

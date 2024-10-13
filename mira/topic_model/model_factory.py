@@ -1,5 +1,6 @@
-from mira.topic_model.modality_mixins.accessibility_model import AccessibilityModel, AccessibilityLSIModel
+from mira.topic_model.modality_mixins.accessibility_model import AccessibilityModel
 from mira.topic_model.modality_mixins.expression_model import ExpressionModel
+from mira.topic_model.embedded_topic_model.base import PretrainedEmbeddingModel, LSIEmbeddingModel
 
 from mira.topic_model.CODAL.covariate_model import CovariateModel
 from mira.topic_model.generative_models.dirichlet_process import \
@@ -77,7 +78,8 @@ def make_model(
     continuous_covariates = None,
     covariates_keys = None,
     extra_features_keys = None,
-    embedding_mode=None,
+    feature_embeddings_key = None,
+    feature_covariates_keys = None,
     **model_parameters,
 ):
     '''
@@ -248,11 +250,19 @@ def make_model(
     
     composition.append(ExpressionModel if is_expression else AccessibilityModel)
 
-    if embedding_mode == 'lsi':
+    if feature_embeddings_key == 'LSI':
         if is_expression:
             raise ValueError('LSI embeddings are only supported for ATAC data')
+        
+        if not endogenous_key is None:
+            raise ValueError('LSI embeddings are only supported for endogenous_key=None')
+        
+        feature_embeddings_key = None
+        composition.append(LSIEmbeddingModel)
+    
+    elif feature_embeddings_key is not None:
         basename = 'embedded_' + basename
-        composition.append(AccessibilityLSIModel)
+        composition.append(PretrainedEmbeddingModel)
 
     composition.append(ExpressionDirichletModel if is_expression else AccessibilityDirichletModel)
 
@@ -279,6 +289,8 @@ def make_model(
         continuous_covariates = none_or_1d(continuous_covariates),
         covariates_keys = none_or_1d(covariates_keys),
         extra_features_keys = none_or_1d(extra_features_keys),
+        feature_embeddings_key = feature_embeddings_key,
+        feature_covariates_keys = none_or_1d(feature_covariates_keys),
     )
 
     parameter_recommendations = \

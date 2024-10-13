@@ -148,7 +148,7 @@ class ExpressionDirichletProcessModel(DPModel):
             dispersion = pyro.param('dispersion', read_depth.new_ones(self.num_exog_features).to(self.device) * 5., constraint = constraints.positive)
             dispersion = dispersion.to(self.device)
 
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
 
                 with poutine.scale(None, anneal_factor):
                     theta = pyro.sample(
@@ -182,7 +182,7 @@ class ExpressionDirichletProcessModel(DPModel):
                                 constraint=constraints.positive)
             alpha = pyro.sample('alpha', dist.Gamma(alpha_a, alpha_b))
 
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
                 
                 theta_loc, theta_scale, rd_loc, rd_scale = self.encoder(endog_features, read_depth, covariates, extra_features)
 
@@ -224,7 +224,7 @@ class AccessibilityDirichletProcessModel(DPModel):
             dispersion = pyro.param('dispersion', read_depth.new_ones(self.num_exog_features).to(self.device) * 5., constraint = constraints.positive)
             dispersion = dispersion.to(self.device)
 
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
 
                 with poutine.scale(None, anneal_factor):
                     theta = pyro.sample(
@@ -259,7 +259,7 @@ class AccessibilityDirichletProcessModel(DPModel):
                                 constraint=constraints.positive)
             alpha = pyro.sample('alpha', dist.Gamma(alpha_a, alpha_b))
 
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
                 
                 theta_loc, theta_scale = self.encoder(endog_features, read_depth, covariates, extra_features)
 

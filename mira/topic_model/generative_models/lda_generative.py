@@ -100,7 +100,7 @@ class ExpressionDirichletModel(DirichletMarginals):
             dispersion = pyro.param('dispersion', read_depth.new_ones(self.num_exog_features).to(self.device) * 5., constraint = constraints.positive)
             dispersion = dispersion.to(self.device)
 
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
 
                 with poutine.scale(None, anneal_factor):
                     
@@ -113,13 +113,8 @@ class ExpressionDirichletModel(DirichletMarginals):
                 theta = theta/theta.sum(-1, keepdim = True)
                 expr_rate = self.decoder(theta, covariates)
                 
-                if not self.nb_parameterize_logspace:
-                    mu = torch.multiply(read_scale, expr_rate)
-                    probs = mu/(mu + dispersion)
-                    X = pyro.sample('obs', dist.NegativeBinomial(total_count = dispersion, probs = probs).to_event(1), obs = exog_features)
-                else:
-                    logits = (read_scale * expr_rate).log() - (dispersion).log()
-                    X = pyro.sample('obs', dist.NegativeBinomial(total_count = dispersion, logits = logits).to_event(1), obs = exog_features)
+                logits = (read_scale * expr_rate).log() - (dispersion).log()
+                X = pyro.sample('obs', dist.NegativeBinomial(total_count = dispersion, logits = logits).to_event(1), obs = exog_features)
 
 
     @scope(prefix= 'rna')
@@ -131,7 +126,7 @@ class ExpressionDirichletModel(DirichletMarginals):
 
             theta_loc, theta_scale, rd_loc, rd_scale = self.encoder(endog_features, read_depth, covariates, extra_features)
             
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
 
                 with poutine.scale(None, anneal_factor):
 
@@ -155,7 +150,7 @@ class AccessibilityDirichletModel(DirichletMarginals):
 
             theta_loc, theta_scale = super().model()
             
-            with pyro.plate("cells", endog_features.shape[0]):
+            with pyro.plate("cells", exog_features.shape[0]):
 
                 with poutine.scale(None, anneal_factor):
                     theta = pyro.sample(
@@ -165,16 +160,10 @@ class AccessibilityDirichletModel(DirichletMarginals):
                 theta = theta/theta.sum(-1, keepdim = True)            
                 peak_probs = self.decoder(theta, covariates)
                 
-                #if self.count_model == 'binary':
-                #    #print('this')
                 pyro.sample(
                     'obs', ZeroPaddedBinaryMultinomial(total_count = 1, probs = peak_probs), obs = exog_features,
                 )
-                #else:
-                #    pyro.sample(
-                #        'obs', ZeroPaddedMultinomial(probs = peak_probs, validate_args = False), obs = (exog_features, endog_features),
-                #     )
-
+                
 
     @scope(prefix = 'atac')
     def guide(self, *, endog_features, exog_features, read_depth, covariates, 
@@ -184,8 +173,8 @@ class AccessibilityDirichletModel(DirichletMarginals):
         with poutine.scale(None, batch_size_adjustment):
             super().guide()
         
-            with pyro.plate("cells", endog_features.shape[0]):
-                
+            with pyro.plate("cells", exog_features.shape[0]):
+
                 theta_loc, theta_scale = self.encoder(endog_features, read_depth, covariates, extra_features)
 
                 with poutine.scale(None, anneal_factor):

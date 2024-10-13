@@ -315,6 +315,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             covariates_keys = None,
             categorical_covariates = None,
             continuous_covariates = None,
+            feature_covariates_keys = None,
+            feature_embeddings_key = None,
             extra_features_keys = None,
             num_topics = 16,
             hidden = 128,
@@ -403,6 +405,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self.embedding_dropout = embedding_dropout
         self.cost_beta = cost_beta
         self.atac_encoder = atac_encoder
+        self.feature_covariates_keys = feature_covariates_keys
+        self.feature_embeddings_key = feature_embeddings_key
         
 
     def _spawn_submodel(self, generative_model):
@@ -576,8 +580,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
 
     @adi.wraps_modelfunc(fetch = tmi.fit_adata, 
-        fill_kwargs=['features','highly_variable','dataset'])
-    def write_ondisk_dataset(self,dirname = None,*,features, highly_variable, dataset):
+        fill_kwargs=['feature_attrs','dataset'])
+    def write_ondisk_dataset(self,dirname = None,*,feature_attrs, dataset):
         
         if dirname is None:
             raise ValueError('Must provide a "dirname" for to write the dataset')
@@ -585,8 +589,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         tmi.OnDiskDataset.write_to_disk(
             batch_size = self.batch_size,
             dirname = dirname, 
-            features = features,
-            highly_variable = highly_variable, 
+            feature_attrs = feature_attrs,
             dataset = dataset
         )
 
@@ -644,7 +647,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             shuffle = True, drop_last=True)
 
 
-    def _get_dataset_statistics(self, dataset, training_bar = True):
+    def _get_dataset_statistics(self, dataset, training_bar = True, **kw):
 
         self.categorical_transformer = OneHotEncoder(
             sparse_output = False, 
@@ -655,6 +658,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
     def _get_loss_adjustment(self, batch):
         return 64/len(batch['read_depth'])
+
 
     def _get_weights(self, on_gpu = True, inference_mode = False,*,
             num_exog_features, num_endog_features, 
@@ -678,6 +682,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
         use_cuda = torch.cuda.is_available() and self.use_cuda and on_gpu
         self.device = torch.device('cuda:0' if use_cuda else 'cpu')
+
         if not use_cuda:
             if not inference_mode:
                 logger.warning('Cuda unavailable. Will not use GPU speedup while training.')
@@ -724,9 +729,9 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
 
     def transform_batch(self, data_loader, bar = True, desc = ''):
-
-        for batch in tqdm(data_loader, desc = desc) if bar else data_loader:
-            yield {k : v.to(self.device) for k,v in batch.items()}
+        yield from tqdm(data_loader, desc = desc) if bar else data_loader
+        #for batch in tqdm(data_loader, desc = desc) if bar else data_loader:
+        #    yield {k : v.to(self.device) for k,v in batch.items()}
 
     def _get_1cycle_scheduler(self, n_batches_per_epoch):
         
@@ -804,7 +809,13 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         #assert(len(f) == self.num_exog_features)
         self._features = f
 
-    def _instantiate_model(self, training_bar = True,*, features, highly_variable, dataset):
+
+    def _instantiate_model(self, training_bar = True,*, 
+                           features, 
+                           highly_variable, 
+                           dataset,
+                           **feature_attrs,
+                        ):
 
         assert(isinstance(self.num_epochs, int) and self.num_epochs > 0)
         assert(isinstance(self.batch_size, int) and self.batch_size > 0)
@@ -818,8 +829,13 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self.enrichments = {}
         self.features = features
         self.highly_variable = highly_variable
+        
+        self._get_dataset_statistics(
+            dataset, 
+            training_bar = training_bar,
+            **feature_attrs
+        )
 
-        self._get_dataset_statistics(dataset, training_bar = training_bar)
         batch = next(iter(dataset.get_dataloader(self, training = True, batch_size = 2)))
 
         self.num_endog_features = self.highly_variable.sum() #batch['endog_features'].shape[-1]
@@ -850,10 +866,10 @@ class BaseModel(torch.nn.Module, BaseEstimator):
             }
 
     @adi.wraps_modelfunc(fetch = tmi.fit, 
-        fill_kwargs=['features','highly_variable','dataset'], requires_adata = False)
+        fill_kwargs=['feature_attrs','dataset'], requires_adata = False)
     def get_learning_rate_bounds(self, num_steps = 100, eval_every = 3, num_epochs = 3,
         lower_bound_lr = 1e-6, upper_bound_lr = 5,*,
-        features, highly_variable, dataset):
+        feature_attrs, dataset):
         '''
         Use the learning rate range test (LRRT) to determine minimum and maximum learning
         rates that enable the model to traverse the gradient of the loss. 
@@ -895,8 +911,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
         '''
         self._instantiate_model(
-            features = features, 
-            highly_variable = highly_variable, 
+            **feature_attrs,
             dataset = dataset
         )
 
@@ -936,8 +951,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
                     
                     try:
                         step_loss += self._step(batch, self.cost_beta, self._get_loss_adjustment(batch))['loss']
-                    except ValueError:
-                        raise ModelParamError()
+                    except ValueError as err:
+                        raise ModelParamError() from err
 
                     batches_complete+=1
                     
@@ -1130,8 +1145,8 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
 
     @adi.wraps_modelfunc(tmi.fit, adi.return_output,
-        fill_kwargs=['features','highly_variable','dataset'], requires_adata = False)
-    def instantiate_model(self,*, features, highly_variable, dataset):
+        fill_kwargs=['feature_attrs','dataset'], requires_adata = False)
+    def instantiate_model(self,*, feature_attrs, dataset):
         '''
         Given the exogenous and enxogenous features provided, instantiate weights
         of neural network. Called internally by `fit`.
@@ -1146,7 +1161,7 @@ class BaseModel(torch.nn.Module, BaseEstimator):
         self : object
         '''
         self._instantiate_model(
-                features = features, highly_variable = highly_variable, 
+                **feature_attrs, 
                 dataset = dataset,
             )
 
@@ -1154,12 +1169,11 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
 
     def _fit(self, writer = None, training_bar = True, reinit = True, log_every = 10,*,
-            dataset, features, highly_variable):
+            dataset, feature_attrs):
         
         if reinit:
             self._instantiate_model(
-                features = features, 
-                highly_variable = highly_variable, 
+                **feature_attrs, 
                 dataset = dataset,
                 training_bar = training_bar
             )
@@ -1233,9 +1247,9 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
 
     @adi.wraps_modelfunc(tmi.fit, adi.return_output,
-        fill_kwargs=['features','highly_variable','dataset'], requires_adata = False)
+        fill_kwargs=['feature_attrs','dataset'], requires_adata = False)
     def fit(self, writer = None, reinit = True, log_every = 10,*,
-        features, highly_variable, dataset):
+        feature_attrs, dataset):
         '''
         Initializes new weights, then fits model to data.
 
@@ -1272,18 +1286,18 @@ class BaseModel(torch.nn.Module, BaseEstimator):
 
         '''
         for _ in self._fit(writer = writer, reinit = reinit, log_every = log_every,
-            features = features, highly_variable = highly_variable, dataset = dataset):
+            feature_attrs=feature_attrs, dataset = dataset):
             pass
 
         return self
 
     @adi.wraps_modelfunc(tmi.fit, adi.return_output,
-        fill_kwargs=['features','highly_variable','dataset'], requires_adata = False)
+        fill_kwargs=['feature_attrs','dataset'], requires_adata = False)
     def _internal_fit(self, writer = None, log_every = 10,*,
-            features, highly_variable, dataset):
+            feature_attrs, dataset):
 
         return self._fit(training_bar = False, writer = writer, log_every = log_every,
-            features = features, highly_variable = highly_variable, 
+            feature_attrs=feature_attrs, 
             dataset=dataset)
 
 

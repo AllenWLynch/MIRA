@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 from scipy import sparse
 from mira.adata_interface.core import fetch_layer, add_obs_col, \
-        add_obsm, project_matrix, add_varm
+        add_obsm, project_matrix, add_varm, fetch_varm
 from torch.utils.data import Dataset, IterableDataset
 import os
 import glob
@@ -60,30 +60,41 @@ class TopicModelDataset:
                 'extra_features' : np.array(extra_features).astype(np.float32),
             }
 
-            return {
-                k : torch.tensor(v, requires_grad = False)
+            try:
+                device= model.device
+            except AttributeError:
+                device = torch.device('cpu')
+
+            tens = lambda t : torch.tensor(t, requires_grad = False).to(device)
+
+            tensor_input = {
+                k : tens(v) if isinstance(v, np.ndarray) else tuple(tens(_v) for _v in v)
                 for k, v in features.items()
             }
 
+            return tensor_input
+
         return collate(**_transpose_list_of_dict(batch))
+
 
     def check_meta(self, model):
         
         for check, value in self.get_fit_meta().items():
-            assert getattr(model, check) == value, \
+            model_val = getattr(model, check)
+            assert model_val == value, \
                     'This on-disk dataset may not have been compiled with ' \
                     'this model\'s parameters. Mismatch in {}: model has {}, dataset has {}'.format(
                         check, getattr(model, check), value
                     )
 
-
     def get_fit_meta(self):
         return self._fit_meta
 
     def get_dataloader(self,
-        model,
-        training = False,
-        batch_size = None):
+            model,
+            training = False,
+            batch_size = None
+        ):
 
         if batch_size is None:
             batch_size = model.batch_size
@@ -116,8 +127,10 @@ class OnDiskDataset(TopicModelDataset, IterableDataset):
 
     @classmethod
     def write_to_disk(cls, batch_size = 128,*,
-            dirname, features, 
-            highly_variable, dataset):
+            dirname,
+            dataset,
+            feature_attrs,
+            ):
 
         chunk_size = batch_size * 8
 
@@ -132,8 +145,7 @@ class OnDiskDataset(TopicModelDataset, IterableDataset):
         os.mkdir(os.path.join(dirname, 'chunks'))
 
         meta = {
-            'features' : features,
-            'highly_variable' : highly_variable,
+            'feature_attrs' : feature_attrs,
             'length' : len(dataset),
             'fit_meta' : dataset.get_fit_meta(),
         }
@@ -158,11 +170,15 @@ class OnDiskDataset(TopicModelDataset, IterableDataset):
         self.dirname = dirname
 
         with open(os.path.join(dirname, 'dataset_meta.pkl'), 'rb') as f:
-            self.dataset_meta = pickle.load(f)
+            dataset_meta = pickle.load(f)
 
-        self.features = self.dataset_meta['features']
-        self.highly_variable = self.dataset_meta['highly_variable']
-        self._fit_meta = self.dataset_meta['fit_meta']
+        #self.features = self.dataset_meta['features']
+        #self.highly_variable = self.dataset_meta['highly_variable']
+        for k, v in dataset_meta['feature_attrs'].items():
+            setattr(self, k, v)
+
+        self._fit_meta = dataset_meta['fit_meta']
+        self._length = dataset_meta['length']
 
         self.chunk_names = glob.glob(
             os.path.join(dirname, 'chunks', '*.pkl')
@@ -173,7 +189,7 @@ class OnDiskDataset(TopicModelDataset, IterableDataset):
 
 
     def __len__(self):
-        return self.dataset_meta['length']
+        return self._length
 
 
     def __iter__(self):
@@ -219,10 +235,18 @@ class InMemoryDataset(TopicModelDataset, Dataset):
 
 
     def __init__(self, adata,
-        exogenous_key = None, endogenous_key = None,
-        features = None, highly_variable = None,*,
-        categorical_covariates, continuous_covariates, covariates_keys, 
-        extra_features_keys, counts_layer,
+            exogenous_key = None, 
+            endogenous_key = None,
+            features = None, 
+            highly_variable = None,
+            feature_embeddings_key = None,
+            feature_covariates_keys = None,
+            *,
+            categorical_covariates, 
+            continuous_covariates, 
+            covariates_keys, 
+            extra_features_keys, 
+            counts_layer,
         ):
 
         self._fit_meta = dict(
@@ -232,6 +256,8 @@ class InMemoryDataset(TopicModelDataset, Dataset):
             counts_layer = counts_layer,
             exogenous_key = exogenous_key,
             endogenous_key = endogenous_key,
+            covariates_keys = covariates_keys,
+            feature_embeddings_key = feature_embeddings_key,
         )
 
         if features is None or highly_variable is None:
@@ -250,12 +276,22 @@ class InMemoryDataset(TopicModelDataset, Dataset):
 
         self.extra_features = fetch_columns(self, adata, extra_features_keys)
 
+        self.feature_embeddings = fetch_varm(self, adata[:, self.features], feature_embeddings_key) \
+                                    if not feature_embeddings_key is None else None
+        
+        self.trainable_embeddings = None
+        if not self.feature_embeddings is None:
+            self.trainable_embeddings = np.all( np.isclose(self.feature_embeddings, 0), axis=0 )            
+        
+        self.feature_covariates = fetch_var_columns(self, adata[:, self.features], feature_covariates_keys)
+        
         assert isinstance(self.exog_features, sparse.spmatrix)
         assert isinstance(self.exog_features, sparse.spmatrix)
 
 
     def __len__(self):
         return self.exog_features.shape[0]
+
 
     def __getitem__(self, idx):
         return {
@@ -266,6 +302,16 @@ class InMemoryDataset(TopicModelDataset, Dataset):
             'continuous_covariates' : self.continuous_covariates[idx] if not self.continuous_covariates is None else [],
             'extra_features' : self.extra_features[idx] if not self.extra_features is None else []
         }
+    
+
+    def get_feature_attrs(self):
+        return dict(
+            features = self.features,
+            highly_variable = self.highly_variable,
+            feature_embeddings = self.feature_embeddings,
+            feature_covariates = self.feature_covariates,
+            trainable_embeddings = self.trainable_embeddings
+        )
 
 
 def fit_adata(self, adata):
@@ -278,13 +324,14 @@ def fit_adata(self, adata):
         continuous_covariates=self.continuous_covariates,
         categorical_covariates=self.categorical_covariates,
         extra_features_keys=self.extra_features_keys,
-        counts_layer=self.counts_layer
+        counts_layer=self.counts_layer,
+        feature_embeddings_key=self.feature_embeddings_key,
+        feature_covariates_keys=self.feature_covariates_keys,
     )
 
     return dict(
-        features = dataset.features,
-        highly_variable = dataset.highly_variable,
         dataset = dataset,
+        feature_attrs = dataset.get_feature_attrs(),
     )
 
 
@@ -298,9 +345,8 @@ def fit_on_disk_dataset(self, dirname):
     dataset.check_meta(self)
     
     return dict(
-        features = dataset.features,
-        highly_variable = dataset.highly_variable,
         dataset = dataset,
+        feature_attrs = dataset.get_feature_attrs()
     )
 
 
@@ -377,6 +423,18 @@ def fetch_columns(self, adata, cols, dtype = np.float32):
     else:
         return np.hstack([
             adata.obs_vector(col).astype(dtype)[:, np.newaxis] 
+            for col in cols
+        ])
+    
+
+def fetch_var_columns(self, adata, cols, dtype = np.float32):
+    
+    assert(isinstance(cols, list) or cols is None)
+    if cols is None:
+        return np.array([]).reshape(0, adata.shape[1])
+    else:
+        return np.vstack([
+            adata.var_vector(col).astype(dtype)[np.newaxis, :] 
             for col in cols
         ])
 

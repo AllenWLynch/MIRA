@@ -301,3 +301,8 @@ def add_varm(adata, output,*,add_key):
 
     logger.info('Added key to varm: ' + str(add_key))
     adata.varm[add_key] = output
+
+
+def fetch_varm(self, adata, key):
+    return adata.varm[key].T
+
